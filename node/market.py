@@ -1,7 +1,6 @@
 """
 This module manages all market related activities
 """
-from base64 import b64decode, b64encode
 import gnupg
 import hashlib
 import json
@@ -9,7 +8,6 @@ import logging
 from PIL import Image, ImageOps
 import random
 from StringIO import StringIO
-import traceback
 import re
 from tornado import ioloop
 
@@ -217,13 +215,13 @@ class Market(object):
             )
 
     def refund_recipient(self, recipient_id, order_id):
-        self.log.debug('Refunding recipient')
+        self.log.debug('Refunding recipient %s %s', recipient_id, order_id)
 
     def generate_new_pubkey(self, contract_id):
         self.log.debug('Generating new pubkey for contract')
 
         # Retrieve next key id from DB
-        next_key_id = len(self.db_connection.select_entries("keystore", select_fields="id")) + 1
+        next_key_id = int(self.db_connection.select_entries("keystore", select_fields="id")) + 1
 
         # Store updated key in DB
         self.db_connection.insert_entry(
@@ -259,7 +257,6 @@ class Market(object):
         seller['seller_BTC_uncompressed_pubkey'] = self.generate_new_pubkey(contract_id)
         seller['seller_contract_id'] = contract_id
         seller['seller_GUID'] = self.settings['guid']
-        seller['seller_Bitmessage'] = self.settings['bitmessage']
         seller['seller_refund_addr'] = self.settings['refundAddress']
 
         # Process and crop thumbs for images
@@ -519,50 +516,6 @@ class Market(object):
                 self.transport.guid
             )
 
-    def get_messages(self):
-        """Get messages listing for market"""
-        self.log.info(
-            "Listing messages for market: %s", self.transport.market_id)
-        settings = self.get_settings()
-        try:
-            # Request all messages for our address
-            if self.transport.bitmessage_api:
-                inboxmsgs = json.loads(
-
-                    self.transport.bitmessage_api.getInboxMessagesByReceiver(
-                        settings['bitmessage']))
-                for message in inboxmsgs['inboxMessages']:
-                    # Base64 decode subject and content
-                    message['subject'] = b64decode(message['subject'])
-                    message['message'] = b64decode(message['message'])
-                    # TODO: Augment with market, if available
-
-                return {"messages": inboxmsgs}
-        except Exception as exc:
-            self.log.error("Failed to get inbox messages: %s", exc)
-            self.log.error(traceback.format_exc())
-            return {}
-
-    def send_message(self, msg):
-        """Send message for market by bitmessage"""
-        self.log.info(
-            "Sending message for market: %s", self.transport.market_id)
-        settings = self.get_settings()
-        try:
-            # Base64 decode subject and content
-            self.log.info("Encoding message: %s", msg)
-            subject = b64encode(msg['subject'])
-            body = b64encode(msg['body'])
-            result = self.transport.bitmessage_api.sendMessage(
-                msg['to'], settings['bitmessage'], subject, body
-            )
-            self.log.info("Send message result: %s", result)
-            return {}
-        except Exception as exc:
-            self.log.error("Failed to send message: %s", exc)
-            self.log.error(traceback.format_exc())
-            return {}
-
     def send_inbox_message(self, msg):
         """Send message for market internally"""
         self.log.info(
@@ -623,7 +576,7 @@ class Market(object):
         else:
             return None
 
-    def get_contracts(self, page=0, remote=False):
+    def get_contracts(self, page=0):
         """Select contracts for market from database"""
         self.log.info(
             "Getting contracts for market: %s", self.transport.market_id)
@@ -658,10 +611,10 @@ class Market(object):
             try:
                 item_delivery = contract_field['item_delivery']
             except KeyError:
-                self.log.error('item_delivery not found in Contract field')
+                self.log.error('item_delivery not found in contract_field')
                 continue
             except TypeError:
-                self.log.error('Malformed Contract field: %s',
+                self.log.error('Malformed contract_field: %s',
                                str(contract_field))
                 continue
             shipping_price = item_delivery.get('shipping_price')
@@ -820,11 +773,9 @@ class Market(object):
                 self.transport.pubkey,
                 self.transport.guid,
                 settings['storeDescription'],
-                self.signature,
                 settings['nickname'],
                 settings.get('PGPPubKey', ''),
                 settings.get('email', ''),
-                settings.get('bitmessage', ''),
                 settings.get('arbiter', ''),
                 settings.get('notary', False),
                 settings.get('notaryDescription', ''),
@@ -839,7 +790,7 @@ class Market(object):
         else:
             self.log.error('Could not find peer to send page to.')
 
-    def validate_on_query_myorders(self, *data):
+    def validate_on_query_myorders(self):
         self.log.debug('Validating on query myorders message.')
         return True
 
@@ -847,7 +798,7 @@ class Market(object):
         """Run if someone is querying for your page"""
         self.log.debug("Someone is querying for your page: %s", peer)
 
-    def validate_on_inbox_message(self, *data):
+    def validate_on_inbox_message(self):
         self.log.debug('Validating on inbox message.')
         return True
 
@@ -897,7 +848,7 @@ class Market(object):
                 {"type": "inbox_count", "count": len(messages)}
             )
 
-    def validate_on_query_listing(self, *data):
+    def validate_on_query_listing(self):
         self.log.debug('Validating on query listing message.')
         return True
 
@@ -924,7 +875,7 @@ class Market(object):
     def on_query_listings(self, peer, page=0):
         """Run if someone is querying your listings"""
         self.log.info("Someone is querying your listings: %s", peer)
-        contracts = self.get_contracts(page, remote=True)
+        contracts = self.get_contracts(page)
 
         if len(contracts['contracts']) == 0:
             self.transport.send(
@@ -941,7 +892,7 @@ class Market(object):
                 self.transport.send(contract, peer['senderGUID'])
                 self.log.info('Send listing result')
 
-    def validate_on_peer(self, *data):
+    def validate_on_peer(self):
         self.log.debug('Validating on peer message.')
         return True
 
